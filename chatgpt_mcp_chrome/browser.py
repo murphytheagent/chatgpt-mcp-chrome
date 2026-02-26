@@ -157,36 +157,81 @@ class BrowserController:
     # ------------------------------------------------------------------
 
     async def select_model(self, model: str | None) -> ModelConfig:
-        """Select a model via the dropdown menu.
+        """Select a model and thinking effort via the dropdown menu.
 
         Opens the model-switcher dropdown, clicks the target menu item by
-        its ``data-testid``, then waits for the menu to close.
+        its ``data-testid``, then sets the Pro thinking effort if applicable.
         """
         page = await self.ensure_connected()
         config = get_model_config(model)
 
         # Check if the target model is already selected
         switcher = page.locator(SEL_MODEL_SWITCHER).first
+        need_model_switch = True
         try:
             label = await switcher.get_attribute("aria-label") or ""
             # e.g. "Model selector, current model is 5.2 Pro"
-            if config.display_name.lower() in label.lower():
-                logger.info("Model '%s' already selected", config.display_name)
-                return config
+            if "pro" in label.lower():
+                need_model_switch = False
         except Exception:
             pass
 
-        # Open the dropdown
-        await switcher.click(timeout=5_000)
-        await asyncio.sleep(0.5)
+        if need_model_switch:
+            # Open the dropdown
+            await switcher.click(timeout=5_000)
+            await asyncio.sleep(0.5)
 
-        # Click the target menu item
-        item = page.locator(f'[data-testid="{config.dropdown_testid}"]').first
-        await item.click(timeout=5_000)
-        await asyncio.sleep(1)
+            # Click the target menu item
+            item = page.locator(f'[data-testid="{config.dropdown_testid}"]').first
+            await item.click(timeout=5_000)
+            await asyncio.sleep(1)
 
-        logger.info("Selected model '%s'", config.display_name)
+        # Set thinking effort via the Pro chip menu
+        if config.thinking_effort:
+            await self._set_thinking_effort(config.thinking_effort)
+
+        logger.info("Selected mode '%s' (effort: %s)", config.display_name, config.thinking_effort)
         return config
+
+    async def _set_thinking_effort(self, effort: str) -> None:
+        """Set Pro thinking effort ('Standard' or 'Extended').
+
+        Clicks the Pro chip in the composer footer to open the effort menu,
+        then selects the target option via role=menuitemradio text match.
+        """
+        page = await self.ensure_connected()
+
+        # Find the Pro chip button (the one with text "Pro", not the X button)
+        pro_btn = page.locator('button:has-text("Pro")').last
+        bbox = await pro_btn.bounding_box()
+        if not bbox:
+            logger.warning("Pro chip not found — skipping effort selection")
+            return
+
+        # Click the right side of the chip to open the effort menu
+        await page.mouse.click(
+            bbox["x"] + bbox["width"] - 5,
+            bbox["y"] + bbox["height"] / 2,
+        )
+        await asyncio.sleep(0.8)
+
+        # Check if the desired effort is already selected
+        target = page.locator(f'[role="menuitemradio"]:has-text("{effort}")')
+        try:
+            checked = await target.get_attribute("aria-checked", timeout=3_000)
+            if checked == "true":
+                # Already set — dismiss menu by pressing Escape
+                await page.keyboard.press("Escape")
+                await asyncio.sleep(0.3)
+                logger.info("Thinking effort '%s' already selected", effort)
+                return
+            await target.click(timeout=3_000)
+            await asyncio.sleep(0.5)
+            logger.info("Set thinking effort to '%s'", effort)
+        except Exception:
+            # Menu might not have appeared (e.g. non-Pro model) — dismiss
+            await page.keyboard.press("Escape")
+            logger.warning("Could not set thinking effort to '%s'", effort)
 
     # ------------------------------------------------------------------
     # Project navigation

@@ -11,13 +11,15 @@ class ModelConfig:
     dropdown_testid: str
     timeout_sec: int
     display_name: str
+    # Pro thinking effort: None (not applicable), "Standard", or "Extended"
+    thinking_effort: str | None = None
 
 
 # These map to the actual ChatGPT 5.2 dropdown options.
 # data-testid values come from the model switcher menu.
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "standard": ModelConfig("model-switcher-gpt-5-2-thinking", 900, "Standard"),
-    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Deep"),
+    "standard": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Standard", "Standard"),
+    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Deep", "Extended"),
 }
 
 # Aliases — keep old names working for backward compat
@@ -42,5 +44,5 @@ def get_model_config(model: str | None) -> ModelConfig:
     key = ALIASES.get(key, key)
     if key in MODEL_CONFIGS:
         return MODEL_CONFIGS[key]
-    # Unknown — default to auto
+    # Unknown — default
     return MODEL_CONFIGS[DEFAULT_MODEL]

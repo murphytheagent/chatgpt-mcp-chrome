@@ -40,10 +40,10 @@ async def ask(
     file_paths: list[str] | None = None,
     project: str | None = None,
 ) -> str:
-    """Send a prompt to an external reasoning model and wait for the full response.
+    """Send a prompt to Athena (external expert) and wait for the full response.
 
     Use this for tasks that need extended reasoning, hard math, proofs,
-    or web search — things that benefit from a stronger thinking model.
+    or web search — things that benefit from a deeper analysis.
 
     Args:
         prompt:     The text to send.
@@ -106,7 +106,7 @@ async def ask(
 
 @mcp.tool()
 async def new_chat() -> str:
-    """Start a new conversation with the external reasoning model."""
+    """Start a new conversation with Athena (external expert)."""
     if _pending:
         return (
             "A previous request is still being processed. "

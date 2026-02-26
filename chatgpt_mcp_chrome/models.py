@@ -18,8 +18,8 @@ class ModelConfig:
 # These map to the actual ChatGPT 5.2 dropdown options.
 # data-testid values come from the model switcher menu.
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "standard": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Standard", "Standard"),
-    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Deep", "Extended"),
+    "standard": ModelConfig("model-switcher-gpt-5-2-pro", 3600, "Standard", "Standard"),
+    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 7200, "Deep", "Extended"),
 }
 
 # Aliases — keep old names working for backward compat

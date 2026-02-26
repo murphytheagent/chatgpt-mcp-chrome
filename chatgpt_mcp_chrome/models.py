@@ -31,7 +31,7 @@ ALIASES: dict[str, str] = {
     "research": "deep",
 }
 
-DEFAULT_MODEL = "standard"
+DEFAULT_MODEL = "deep"
 
 
 def get_model_config(model: str | None) -> ModelConfig:

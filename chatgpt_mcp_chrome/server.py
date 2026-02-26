@@ -47,8 +47,8 @@ async def ask(
 
     Args:
         prompt:     The text to send.
-        mode:       "standard" (default) or "deep" (extended reasoning,
-                    slower but stronger for very hard problems).
+        mode:       "deep" (default, extended reasoning) or "standard"
+                    (faster, for simple questions).
         file_paths: Optional list of absolute file paths to attach.
         project:    Project folder for organizing chats (default: "Murphy").
 

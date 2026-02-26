@@ -16,24 +16,22 @@ class ModelConfig:
 # These map to the actual ChatGPT 5.2 dropdown options.
 # data-testid values come from the model switcher menu.
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "auto": ModelConfig("model-switcher-gpt-5-2", 300, "Auto"),
-    "instant": ModelConfig("model-switcher-gpt-5-2-instant", 120, "Instant"),
-    "thinking": ModelConfig("model-switcher-gpt-5-2-thinking", 900, "Thinking"),
-    "pro": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Pro"),
+    "standard": ModelConfig("model-switcher-gpt-5-2-thinking", 900, "Standard"),
+    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 1800, "Deep"),
 }
 
-# Aliases for convenience
+# Aliases — keep old names working for backward compat
 ALIASES: dict[str, str] = {
-    "gpt-5": "auto",
-    "gpt-5.2": "auto",
-    "5.2": "auto",
-    "fast": "instant",
-    "quick": "instant",
-    "deep": "pro",
-    "research": "pro",
+    "thinking": "standard",
+    "auto": "standard",
+    "instant": "standard",
+    "fast": "standard",
+    "quick": "standard",
+    "pro": "deep",
+    "research": "deep",
 }
 
-DEFAULT_MODEL = "thinking"
+DEFAULT_MODEL = "standard"
 
 
 def get_model_config(model: str | None) -> ModelConfig:

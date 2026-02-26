@@ -36,7 +36,7 @@ DEFAULT_PROJECT = os.environ.get("CHATGPT_DEFAULT_PROJECT", "Murphy")
 @mcp.tool()
 async def ask(
     prompt: str,
-    model: str | None = None,
+    mode: str | None = None,
     file_paths: list[str] | None = None,
     project: str | None = None,
 ) -> str:
@@ -47,7 +47,7 @@ async def ask(
 
     Args:
         prompt:     The text to send.
-        model:      "standard" (default) or "deep" (extended reasoning,
+        mode:       "standard" (default) or "deep" (extended reasoning,
                     slower but stronger for very hard problems).
         file_paths: Optional list of absolute file paths to attach.
         project:    Project folder for organizing chats (default: "Murphy").
@@ -71,7 +71,7 @@ async def ask(
         target_project = project or DEFAULT_PROJECT
         await _browser.navigate_to_project(target_project)
 
-        model_config = await _browser.select_model(model)
+        model_config = await _browser.select_model(mode)
 
         # Upload files before sending the message
         if file_paths:

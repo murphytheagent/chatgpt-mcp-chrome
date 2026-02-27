@@ -37,6 +37,10 @@ SEL_FILE_INPUT = 'input[type="file"]'
 SEL_ATTACH_BUTTON = 'button[aria-label="Attach files"]'
 
 CDP_URL = os.environ.get("CHATGPT_CDP_URL", "http://127.0.0.1:9222")
+# Fixed slot ID for tab isolation in multi-agent setups.  Each slot
+# gets a persistent tab identified by window.name ("consult-slot-N").
+# When unset, falls back to a single shared tab (serial mode).
+SLOT_ID = os.environ.get("CONSULT_SLOT_ID", "")
 CHROME_PATH = os.environ.get(
     "CHROME_PATH",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -66,11 +70,12 @@ TRANSIENT_TEXTS = frozenset({
 class BrowserController:
     """Manages a persistent CDP connection to Chrome and ChatGPT page actions."""
 
-    def __init__(self) -> None:
+    def __init__(self, slot_id: str = "") -> None:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._page: Page | None = None
         self._article_count_before_send: int = 0
+        self._slot_id: str = slot_id or SLOT_ID
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -114,18 +119,36 @@ class BrowserController:
             raise RuntimeError("No browser contexts found.")
 
         ctx = contexts[0]
+        slot_name = f"consult-slot-{self._slot_id}" if self._slot_id else ""
+
+        # Find an existing tab by window.name (survives page navigations).
+        # Parallel mode: match "consult-slot-N" exactly.
+        # Serial mode: match any ChatGPT tab whose window.name is NOT a slot tag.
         for pg in ctx.pages:
-            if "chatgpt.com" in pg.url:
+            if "chatgpt.com" not in pg.url:
+                continue
+            try:
+                wname = await pg.evaluate("window.name")
+            except Exception:
+                continue
+            if slot_name and wname == slot_name:
+                self._page = pg
+                logger.info("Reusing slot %s tab: %s", self._slot_id, pg.url)
+                return
+            if not slot_name and not (wname or "").startswith("consult-slot-"):
                 self._page = pg
                 logger.info("Reusing existing ChatGPT tab: %s", pg.url)
                 return
 
+        # No matching tab found — create a new one.
         self._page = await ctx.new_page()
         await self._page.goto(
             "https://chatgpt.com/", wait_until="domcontentloaded", timeout=30_000
         )
         await self._page.wait_for_selector(SEL_PROMPT_TEXTAREA, timeout=15_000)
-        logger.info("Opened new ChatGPT tab")
+        if slot_name:
+            await self._page.evaluate(f'window.name = "{slot_name}"')
+        logger.info("Opened ChatGPT tab%s", f" for slot {self._slot_id}" if self._slot_id else "")
 
     def _launch_chrome(self) -> None:
         cmd = [
@@ -145,7 +168,11 @@ class BrowserController:
         )
 
     async def close(self) -> None:
-        """Disconnect from Chrome (does **not** close the browser)."""
+        """Disconnect from Chrome (does **not** close the browser or the tab).
+
+        Slot tabs are left open so the next dispatch for the same slot can
+        reconnect to them, preserving ChatGPT conversation context.
+        """
         if self._playwright:
             await self._playwright.stop()
         self._playwright = None

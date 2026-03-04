@@ -346,6 +346,9 @@ class BrowserController:
         articles = await page.locator(SEL_MAIN_ARTICLES).all()
         self._article_count_before_send = len(articles)
 
+        # Remember if we're on a project page — successful send navigates to /c/
+        on_project_page = page.url.endswith("/project")
+
         textarea = page.locator(SEL_PROMPT_TEXTAREA)
         await textarea.wait_for(state="visible", timeout=10_000)
         await textarea.click()
@@ -358,6 +361,54 @@ class BrowserController:
         except Exception:
             await textarea.press("Enter")
         logger.info("Message sent (%d chars)", len(prompt))
+
+        # On project pages, verify the send actually worked by checking for
+        # navigation to a conversation URL (/c/).  If it didn't navigate,
+        # retry once with Enter key, then fail fast instead of waiting the
+        # full response timeout.
+        if on_project_page:
+            await self._verify_project_page_send(page)
+
+    async def _verify_project_page_send(self, page: Page) -> None:
+        """After sending from a /project page, verify navigation to /c/.
+
+        When a message is successfully submitted from the project overview
+        page, ChatGPT navigates to ``/c/{conversation_id}``.  If this
+        doesn't happen within a grace period, retry the send and ultimately
+        raise so the caller can fail fast instead of waiting the full
+        response timeout (up to 2 hours).
+        """
+        # First attempt: wait up to 15s for navigation
+        for _ in range(15):
+            await asyncio.sleep(1)
+            if "/c/" in page.url:
+                self._article_count_before_send = 0
+                logger.info("Project-page send verified: %s", page.url)
+                return
+
+        logger.warning("Project-page send: no navigation after 15s, retrying with Enter")
+
+        # Retry: click textarea and press Enter
+        textarea = page.locator(SEL_PROMPT_TEXTAREA)
+        try:
+            await textarea.click(timeout=3_000)
+            await textarea.press("Enter")
+        except Exception:
+            pass
+
+        # Second wait: 10s
+        for _ in range(10):
+            await asyncio.sleep(1)
+            if "/c/" in page.url:
+                self._article_count_before_send = 0
+                logger.info("Project-page send verified on retry: %s", page.url)
+                return
+
+        raise RuntimeError(
+            "Send from project page failed: page did not navigate to a "
+            "conversation after two attempts (25s total). The message was "
+            "not delivered."
+        )
 
     async def get_last_response(self) -> str:
         """Extract the text of the last assistant message.

@@ -546,14 +546,21 @@ class BrowserController:
         return saved
 
     async def is_generating(self) -> bool:
-        """Return *True* while ChatGPT is actively generating or thinking."""
+        """Return *True* while ChatGPT is actively generating or thinking.
+
+        Defaults to *True* when all visibility checks fail with exceptions
+        (e.g. transient CDP/Playwright glitches).  A false negative is far
+        more costly than a false positive: it can cause the response detector
+        to accept a progress placeholder as the final answer.
+        """
         page = await self.ensure_connected()
+        any_check_ok = False  # True once at least one check returns a definitive answer
 
         # Check for streaming indicator
-        streaming = page.locator(SEL_STREAMING).first
         try:
-            if await streaming.is_visible(timeout=500):
+            if await page.locator(SEL_STREAMING).first.is_visible(timeout=500):
                 return True
+            any_check_ok = True
         except Exception:
             pass
 
@@ -563,10 +570,10 @@ class BrowserController:
             SEL_STOP_LEGACY_GENERATING,
             SEL_STOP_LEGACY_REASONING,
         ):
-            btn = page.locator(sel).first
             try:
-                if await btn.is_visible(timeout=500):
+                if await page.locator(sel).first.is_visible(timeout=500):
                     return True
+                any_check_ok = True
             except Exception:
                 pass
 
@@ -581,6 +588,7 @@ class BrowserController:
                     text = (await shimmer.first.inner_text(timeout=500)).strip().lower()
                     if "thinking" in text:
                         return True
+                any_check_ok = True
             except Exception:
                 pass
 
@@ -588,6 +596,12 @@ class BrowserController:
             text = await self.get_last_response()
             if not text:
                 return True
+
+        # If every check threw, assume still generating to avoid false
+        # negatives from transient CDP glitches during long sessions.
+        if not any_check_ok:
+            logger.warning("All is_generating checks failed; assuming still generating")
+            return True
 
         return False
 

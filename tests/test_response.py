@@ -101,6 +101,22 @@ class TestResponseDetector(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(text, "hello")
 
+    def test_pro_thinking_blocks_until_done(self):
+        """Phase 1 blocks while is_generating detects Pro thinking."""
+        # Simulate: 5 polls of "generating" (Pro thinking), then done
+        gen_seq = [True, True, True, True, True, False]
+        browser = _make_browser(
+            is_generating=AsyncMock(side_effect=gen_seq),
+            has_completion_indicators=AsyncMock(return_value=True),
+            get_last_response=AsyncMock(return_value="Full proof here..."),
+        )
+        det = ResponseDetector(browser)
+        ok, text = self._run(det.wait_for_response(ModelConfig("test-id", 30, "Test")))
+        self.assertTrue(ok)
+        self.assertEqual(text, "Full proof here...")
+        # Should have polled is_generating at least 6 times
+        self.assertGreaterEqual(browser.is_generating.call_count, 6)
+
 
 if __name__ == "__main__":
     unittest.main()

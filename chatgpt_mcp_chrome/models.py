@@ -15,11 +15,11 @@ class ModelConfig:
     thinking_effort: str | None = None
 
 
-# These map to the actual ChatGPT 5.2 dropdown options.
+# These map to the actual ChatGPT 5.4 dropdown options.
 # data-testid values come from the model switcher menu.
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "standard": ModelConfig("model-switcher-gpt-5-2-pro", 3600, "Standard", "Standard"),
-    "deep": ModelConfig("model-switcher-gpt-5-2-pro", 7200, "Deep", "Extended"),
+    "standard": ModelConfig("model-switcher-gpt-5-4-pro", 3600, "Standard", "Standard"),
+    "deep": ModelConfig("model-switcher-gpt-5-4-pro", 7200, "Deep", "Extended"),
 }
 
 # Aliases — keep old names working for backward compat

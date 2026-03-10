@@ -15,20 +15,17 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SEC = 2.0
 STABILITY_CHECKS = 3  # consecutive identical non-empty snapshots → done
 INITIAL_GRACE_SEC = 3.0  # let the UI start generating before first poll
-# Short responses that appear alongside completion indicators may be progress
-# placeholders ("I'm checking...", "I'll present...").  Require a stabilization
-# re-check when the detected response is below this character threshold.
-SHORT_RESPONSE_THRESHOLD = 200
 
 
 class ResponseDetector:
     """Detects when ChatGPT has finished generating a response.
 
     Three-phase approach:
-    1. **Generation guard** — while streaming class is present, stop button
-       visible, or no response text yet, the model is still working.
-    2. **Completion indicators + text** — once generation stops, require both
-       action buttons (Copy / Good response) AND non-empty response text.
+    1. **Generation guard** — while the stop button is visible, streaming
+       class is present, "Pro thinking" shimmer is active, or no response
+       text has appeared yet, the model is still working.
+    2. **Completion indicators + text** — once generation stops, require
+       both action buttons (Copy / Good response) AND non-empty response.
     3. **Stability fallback** — if indicators never appear, fall back to
        content-stability polling: N consecutive identical non-empty text
        snapshots means the response has settled.
@@ -67,22 +64,6 @@ class ResponseDetector:
             # Phase 2: completion indicators + non-empty text
             response = await self._browser.get_last_response()
             if await self._browser.has_completion_indicators() and response:
-                if len(response) < SHORT_RESPONSE_THRESHOLD:
-                    # Short text with indicators may be a progress placeholder.
-                    # Wait one poll and re-check; if the text changed, the real
-                    # response is still arriving.
-                    await asyncio.sleep(POLL_INTERVAL_SEC)
-                    recheck = await self._browser.get_last_response()
-                    if recheck != response:
-                        logger.info(
-                            "Short response changed after re-check "
-                            "(%d→%d chars), continuing",
-                            len(response),
-                            len(recheck),
-                        )
-                        stable_count = 0
-                        last_text = recheck or ""
-                        continue
                 logger.info("Response complete (indicators + text)")
                 return True, response
 

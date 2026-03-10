@@ -25,8 +25,10 @@ SEL_PROMPT_TEXTAREA = "#prompt-textarea"
 SEL_SEND_BUTTON = 'button[data-testid="send-button"]'
 SEL_MAIN_ARTICLES = "main article"
 SEL_ASSISTANT_MSG = 'div[data-message-author-role="assistant"]'
-SEL_STOP_BUTTON = 'button[aria-label="Stop generating"]'
-SEL_STOP_REASONING = 'button[aria-label="Stop reasoning"]'
+SEL_STOP_BUTTON = 'button[data-testid="stop-button"]'
+# Legacy selectors kept as fallback for older ChatGPT UI versions
+SEL_STOP_LEGACY_GENERATING = 'button[aria-label="Stop generating"]'
+SEL_STOP_LEGACY_REASONING = 'button[aria-label="Stop reasoning"]'
 SEL_STREAMING = ".result-streaming"
 SEL_COPY_BUTTON = 'article button[aria-label="Copy"]'
 SEL_GOOD_RESPONSE = 'article button[aria-label="Good response"]'
@@ -547,7 +549,7 @@ class BrowserController:
         """Return *True* while ChatGPT is actively generating or thinking."""
         page = await self.ensure_connected()
 
-        # Check for streaming indicator (most reliable)
+        # Check for streaming indicator
         streaming = page.locator(SEL_STREAMING).first
         try:
             if await streaming.is_visible(timeout=500):
@@ -555,8 +557,12 @@ class BrowserController:
         except Exception:
             pass
 
-        # Check stop buttons
-        for sel in (SEL_STOP_BUTTON, SEL_STOP_REASONING):
+        # Check stop button (most reliable during Pro extended thinking)
+        for sel in (
+            SEL_STOP_BUTTON,
+            SEL_STOP_LEGACY_GENERATING,
+            SEL_STOP_LEGACY_REASONING,
+        ):
             btn = page.locator(sel).first
             try:
                 if await btn.is_visible(timeout=500):
@@ -564,13 +570,23 @@ class BrowserController:
             except Exception:
                 pass
 
-        # Check if a new article has appeared but has no usable text yet
-        # (model is still "thinking" before streaming starts)
+        # Check for "Pro thinking" indicator (backup: a shimmer div that
+        # appears during Pro extended thinking alongside placeholder text)
         articles = await page.locator(SEL_MAIN_ARTICLES).all()
         if len(articles) > self._article_count_before_send:
+            last = articles[-1]
+            try:
+                shimmer = last.locator("div.loading-shimmer")
+                if await shimmer.count():
+                    text = (await shimmer.first.inner_text(timeout=500)).strip().lower()
+                    if "thinking" in text:
+                        return True
+            except Exception:
+                pass
+
+            # Article exists but empty — still in pre-streaming phase
             text = await self.get_last_response()
             if not text:
-                # Article exists but empty — still generating
                 return True
 
         return False

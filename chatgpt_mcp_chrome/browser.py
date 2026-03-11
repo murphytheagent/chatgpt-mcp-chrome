@@ -439,14 +439,20 @@ class BrowserController:
         # the actual response text starts rendering.  During Pro/Thinking
         # "thinking" phases the article exists but contains only a thinking
         # indicator — no .markdown div.
-        md = last_article.locator(".markdown").first
-        try:
-            if await md.count():
+        #
+        # ChatGPT Pro renders thinking summaries in a *first* .markdown div
+        # and the actual response in a *second* .markdown div within the
+        # same article.  Always use the LAST .markdown to get the real
+        # response, not the thinking summary.
+        md_all = await last_article.locator(".markdown").all()
+        if md_all:
+            md = md_all[-1]  # last .markdown = actual response
+            try:
                 text = await self._extract_text_with_latex(md)
                 if text and text.lower() not in TRANSIENT_TEXTS:
                     return text
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         # Fallback: .prose div (some response formats)
         prose = last_article.locator(".prose").first

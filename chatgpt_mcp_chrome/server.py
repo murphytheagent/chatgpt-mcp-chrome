@@ -38,7 +38,6 @@ async def ask(
     prompt: str,
     mode: str | None = None,
     file_paths: list[str] | None = None,
-    project: str | None = None,
 ) -> str:
     """Send a prompt to Athena (external expert) and wait for the full response.
 
@@ -50,7 +49,6 @@ async def ask(
         mode:       "deep" (default, Pro + extended thinking) or "standard"
                     (Pro + standard thinking, faster).
         file_paths: Optional list of absolute file paths to attach.
-        project:    Project folder for organizing chats (default: "Murphy").
 
     Returns:
         The assistant's response text (with LaTeX preserved),
@@ -67,9 +65,8 @@ async def ask(
     try:
         _pending = True
 
-        # Navigate to project (default: Murphy)
-        target_project = project or DEFAULT_PROJECT
-        await _browser.navigate_to_project(target_project)
+        # Navigate to project folder
+        await _browser.navigate_to_project(DEFAULT_PROJECT)
 
         model_config = await _browser.select_model(mode)
 

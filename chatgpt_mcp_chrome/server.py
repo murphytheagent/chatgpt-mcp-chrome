@@ -23,6 +23,7 @@ mcp = FastMCP("consult")
 _browser = BrowserController()
 _detector = ResponseDetector(_browser)
 _pending: bool = False
+_first_call: bool = True
 
 # Default project — all chats go here unless overridden via env var.
 DEFAULT_PROJECT = os.environ.get("CHATGPT_DEFAULT_PROJECT", "Murphy")
@@ -54,7 +55,7 @@ async def ask(
         The assistant's response text (with LaTeX preserved),
         or an error / timeout message.
     """
-    global _pending
+    global _pending, _first_call
 
     if _pending:
         return (
@@ -67,6 +68,13 @@ async def ask(
 
         # Navigate to project folder
         await _browser.navigate_to_project(DEFAULT_PROJECT)
+
+        # Start a fresh conversation on the first call of this MCP session.
+        # Tabs persist across dispatches, so without this the new dispatch
+        # would append to the previous dispatch's conversation.
+        if _first_call:
+            await _browser.new_chat()
+            _first_call = False
 
         model_config = await _browser.select_model(mode)
 
@@ -104,6 +112,7 @@ async def ask(
 @mcp.tool()
 async def new_chat() -> str:
     """Start a new conversation with Athena (external expert)."""
+    global _first_call
     if _pending:
         return (
             "A previous request is still being processed. "
@@ -111,6 +120,7 @@ async def new_chat() -> str:
         )
     try:
         await _browser.new_chat()
+        _first_call = False
         return "New chat opened."
     except Exception as exc:
         logger.exception("new_chat failed")

@@ -355,7 +355,16 @@ class BrowserController:
         await textarea.wait_for(state="visible", timeout=10_000)
         await textarea.click()
         await textarea.fill(prompt)
-        await asyncio.sleep(0.3)
+
+        # Playwright's fill() on contenteditable may not trigger React's
+        # synthetic onChange in all ChatGPT page variants (e.g. the project
+        # overview page).  Dispatch native input events so React picks up the
+        # new text and enables the send button.
+        await textarea.evaluate("""el => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }""")
+        await asyncio.sleep(0.5)
 
         send_btn = page.locator(SEL_SEND_BUTTON).first
         try:
@@ -366,31 +375,57 @@ class BrowserController:
 
         # On project pages, verify the send actually worked by checking for
         # navigation to a conversation URL (/c/).  If it didn't navigate,
-        # retry once with Enter key, then fail fast instead of waiting the
-        # full response timeout.
+        # retry with progressively more aggressive strategies.
         if on_project_page:
-            await self._verify_project_page_send(page)
+            await self._verify_project_page_send(page, prompt)
 
-    async def _verify_project_page_send(self, page: Page) -> None:
-        """After sending from a /project page, verify navigation to /c/.
+    async def _verify_project_page_send(
+        self, page: Page, prompt: str = "",
+    ) -> None:
+        """After sending from a /project page, verify the message was delivered.
 
         When a message is successfully submitted from the project overview
         page, ChatGPT navigates to ``/c/{conversation_id}``.  If this
-        doesn't happen within a grace period, retry the send and ultimately
-        raise so the caller can fail fast instead of waiting the full
-        response timeout (up to 2 hours).
+        doesn't happen within a grace period, try progressively more
+        aggressive send strategies.  Also detect alternative success signals
+        (textarea emptied, article count increased) that indicate the
+        message was delivered even without a URL change.
         """
-        # First attempt: wait up to 15s for navigation
-        for _ in range(15):
-            await asyncio.sleep(1)
+
+        async def _check_success() -> str | None:
+            """Return a reason string if delivery can be confirmed, else None."""
             if "/c/" in page.url:
+                return f"URL navigated: {page.url}"
+            # Textarea cleared = ChatGPT consumed the message
+            try:
+                txt = await page.locator(SEL_PROMPT_TEXTAREA).inner_text(
+                    timeout=1_000
+                )
+                textarea_empty = not txt.strip()
+            except Exception:
+                textarea_empty = False
+            articles = await page.locator(SEL_MAIN_ARTICLES).all()
+            new_articles = len(articles) > self._article_count_before_send
+            if textarea_empty and new_articles:
+                return "textarea empty + new article appeared"
+            if new_articles:
+                return "new article appeared"
+            return None
+
+        # --- Attempt 1: wait up to 10s for any success signal ---------------
+        for _ in range(10):
+            await asyncio.sleep(1)
+            reason = await _check_success()
+            if reason:
                 self._article_count_before_send = 0
-                logger.info("Project-page send verified: %s", page.url)
+                logger.info("Project-page send verified (%s)", reason)
                 return
 
-        logger.warning("Project-page send: no navigation after 15s, retrying with Enter")
+        logger.warning(
+            "Project-page send: no success signal after 10s, retrying"
+        )
 
-        # Retry: click textarea and press Enter
+        # --- Attempt 2: re-trigger send via Enter key -----------------------
         textarea = page.locator(SEL_PROMPT_TEXTAREA)
         try:
             await textarea.click(timeout=3_000)
@@ -398,18 +433,57 @@ class BrowserController:
         except Exception:
             pass
 
-        # Second wait: 10s
+        for _ in range(8):
+            await asyncio.sleep(1)
+            reason = await _check_success()
+            if reason:
+                self._article_count_before_send = 0
+                logger.info(
+                    "Project-page send verified on Enter retry (%s)", reason
+                )
+                return
+
+        logger.warning(
+            "Project-page send: Enter retry failed, trying keyboard type"
+        )
+
+        # --- Attempt 3: clear, re-type via keyboard, send -------------------
+        # fill() may not trigger React state on some page variants.
+        # Keyboard type is slower but fires real key events.
+        try:
+            await textarea.click(timeout=3_000)
+            # Select all + delete to clear
+            modifier = "Meta" if os.uname().sysname == "Darwin" else "Control"
+            await page.keyboard.press(f"{modifier}+a")
+            await page.keyboard.press("Backspace")
+            await asyncio.sleep(0.3)
+            # Type a truncated version if prompt is huge (keyboard.type is slow)
+            text_to_type = prompt if len(prompt) <= 2000 else prompt[:2000]
+            await page.keyboard.type(text_to_type, delay=2)
+            await asyncio.sleep(0.5)
+            # Try send button, then Enter
+            send_btn = page.locator(SEL_SEND_BUTTON).first
+            try:
+                await send_btn.click(timeout=3_000)
+            except Exception:
+                await page.keyboard.press("Enter")
+        except Exception as exc:
+            logger.warning("keyboard-type send failed: %s", exc)
+
         for _ in range(10):
             await asyncio.sleep(1)
-            if "/c/" in page.url:
+            reason = await _check_success()
+            if reason:
                 self._article_count_before_send = 0
-                logger.info("Project-page send verified on retry: %s", page.url)
+                logger.info(
+                    "Project-page send verified on keyboard retry (%s)",
+                    reason,
+                )
                 return
 
         raise RuntimeError(
-            "Send from project page failed: page did not navigate to a "
-            "conversation after two attempts (25s total). The message was "
-            "not delivered."
+            "Send from project page failed: no delivery signal after three "
+            "strategies (~30s total). The message was not delivered."
         )
 
     async def get_last_response(self) -> str:
@@ -636,7 +710,9 @@ class BrowserController:
         """Start a new chat conversation.
 
         If currently inside a project, navigates back to the project's
-        home URL so the new chat stays within the project.
+        overview URL so the new chat stays within the project.  Sending
+        from the ``/project`` overview page is handled robustly by
+        ``_verify_project_page_send``.
         """
         page = await self.ensure_connected()
 
@@ -665,4 +741,4 @@ class BrowserController:
 
         await page.wait_for_selector(SEL_PROMPT_TEXTAREA, timeout=10_000)
         self._article_count_before_send = 0
-        logger.info("Opened new chat")
+        logger.info("Opened new chat: %s", page.url)

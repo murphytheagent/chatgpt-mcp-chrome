@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SEC = 2.0
 STABILITY_CHECKS = 3  # consecutive identical non-empty snapshots → done
 INITIAL_GRACE_SEC = 3.0  # let the UI start generating before first poll
+DIAG_LOG_INTERVAL = 15  # log diagnostics every N polls (~30s at 2s interval)
 
 
 class ResponseDetector:
@@ -46,46 +47,84 @@ class ResponseDetector:
         """
         timeout = timeout_override or model_config.timeout_sec
         deadline = time.monotonic() + timeout
+        start = time.monotonic()
 
         # Phase 0: brief grace period for the UI to react
         await asyncio.sleep(INITIAL_GRACE_SEC)
 
         last_text = ""
         stable_count = 0
+        poll_count = 0
 
         while time.monotonic() < deadline:
+            poll_count += 1
+
             # Phase 1: generation guard
             if await self._browser.is_generating():
                 stable_count = 0
                 last_text = ""
+                if poll_count % DIAG_LOG_INTERVAL == 0:
+                    elapsed = int(time.monotonic() - start)
+                    logger.info(
+                        "Waiting: phase=generating, elapsed=%ds, polls=%d",
+                        elapsed, poll_count,
+                    )
                 await asyncio.sleep(POLL_INTERVAL_SEC)
                 continue
 
             # Phase 2: completion indicators + non-empty text
             response = await self._browser.get_last_response()
             if await self._browser.has_completion_indicators() and response:
-                logger.info("Response complete (indicators + text)")
+                elapsed = int(time.monotonic() - start)
+                logger.info(
+                    "Response complete (indicators + text) after %ds, "
+                    "text_len=%d", elapsed, len(response),
+                )
                 return True, response
 
             # Phase 3: stability fallback
             if not response:
+                if poll_count % DIAG_LOG_INTERVAL == 0:
+                    elapsed = int(time.monotonic() - start)
+                    logger.info(
+                        "Waiting: phase=no_text, elapsed=%ds, polls=%d",
+                        elapsed, poll_count,
+                    )
                 await asyncio.sleep(POLL_INTERVAL_SEC)
                 continue
 
             if response == last_text:
                 stable_count += 1
                 if stable_count >= STABILITY_CHECKS:
+                    elapsed = int(time.monotonic() - start)
                     logger.info(
-                        "Response complete (stable for %d polls)", stable_count
+                        "Response complete (stable for %d polls) after %ds, "
+                        "text_len=%d", stable_count, elapsed, len(response),
                     )
                     return True, response
             else:
                 stable_count = 1
                 last_text = response
 
+            if poll_count % DIAG_LOG_INTERVAL == 0:
+                elapsed = int(time.monotonic() - start)
+                logger.info(
+                    "Waiting: phase=stability, elapsed=%ds, polls=%d, "
+                    "stable=%d/%d, text_len=%d",
+                    elapsed, poll_count, stable_count, STABILITY_CHECKS,
+                    len(response),
+                )
+
             await asyncio.sleep(POLL_INTERVAL_SEC)
 
-        # Timeout — return whatever we have
+        # Timeout — log diagnostics and return whatever we have
         final_text = await self._browser.get_last_response()
-        logger.warning("Timed out after %ds waiting for response", timeout)
+        elapsed = int(time.monotonic() - start)
+        is_gen = await self._browser.is_generating()
+        has_ind = await self._browser.has_completion_indicators()
+        logger.warning(
+            "Timed out after %ds (%d polls). is_generating=%s, "
+            "has_indicators=%s, text_len=%d",
+            elapsed, poll_count, is_gen, has_ind, len(final_text),
+        )
         return False, final_text

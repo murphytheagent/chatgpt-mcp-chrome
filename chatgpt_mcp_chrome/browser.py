@@ -23,16 +23,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 SEL_PROMPT_TEXTAREA = "#prompt-textarea"
 SEL_SEND_BUTTON = 'button[data-testid="send-button"]'
-SEL_MAIN_ARTICLES = "main article"
 SEL_ASSISTANT_MSG = 'div[data-message-author-role="assistant"]'
 SEL_STOP_BUTTON = 'button[data-testid="stop-button"]'
 # Legacy selectors kept as fallback for older ChatGPT UI versions
 SEL_STOP_LEGACY_GENERATING = 'button[aria-label="Stop generating"]'
 SEL_STOP_LEGACY_REASONING = 'button[aria-label="Stop reasoning"]'
 SEL_STREAMING = ".result-streaming"
-SEL_COPY_BUTTON = 'article button[aria-label="Copy"]'
-SEL_GOOD_RESPONSE = 'article button[aria-label="Good response"]'
-SEL_READ_ALOUD = 'article button[aria-label="Read aloud"]'
+# Completion-indicator selectors (page-level, NOT scoped to a container).
+# On project pages the action buttons live outside the assistant message div.
+SEL_COMPLETION_BUTTONS = [
+    'button[data-testid="copy-turn-action-button"]',
+    'button[data-testid="good-response-turn-action-button"]',
+    'button[aria-label="Copy response"]',
+    'button[aria-label="Good response"]',
+]
 SEL_NEW_CHAT = '[data-testid="create-new-chat-button"]'
 SEL_MODEL_SWITCHER = '[data-testid="model-switcher-dropdown-button"]'
 SEL_FILE_INPUT = 'input[type="file"]'
@@ -76,7 +80,7 @@ class BrowserController:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._page: Page | None = None
-        self._article_count_before_send: int = 0
+        self._msg_count_before_send: int = 0
         self._slot_id: str = slot_id or SLOT_ID
 
     # ------------------------------------------------------------------
@@ -298,7 +302,7 @@ class BrowserController:
         url = f"https://chatgpt.com{href}" if href.startswith("/") else href
         await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         await page.wait_for_selector(SEL_PROMPT_TEXTAREA, timeout=10_000)
-        self._article_count_before_send = 0
+        self._msg_count_before_send = 0
         logger.info("Navigated to project '%s': %s", project_name, page.url)
 
     # ------------------------------------------------------------------
@@ -344,9 +348,9 @@ class BrowserController:
         """Type *prompt* into the chat textarea and send it."""
         page = await self.ensure_connected()
 
-        # Record article count BEFORE sending so we can detect a new response
-        articles = await page.locator(SEL_MAIN_ARTICLES).all()
-        self._article_count_before_send = len(articles)
+        # Record assistant message count BEFORE sending so we can detect a new response
+        msgs = await page.locator(SEL_ASSISTANT_MSG).all()
+        self._msg_count_before_send = len(msgs)
 
         # Remember if we're on a project page — successful send navigates to /c/
         on_project_page = page.url.endswith("/project")
@@ -404,12 +408,12 @@ class BrowserController:
                 textarea_empty = not txt.strip()
             except Exception:
                 textarea_empty = False
-            articles = await page.locator(SEL_MAIN_ARTICLES).all()
-            new_articles = len(articles) > self._article_count_before_send
-            if textarea_empty and new_articles:
-                return "textarea empty + new article appeared"
-            if new_articles:
-                return "new article appeared"
+            msgs = await page.locator(SEL_ASSISTANT_MSG).all()
+            new_msg = len(msgs) > self._msg_count_before_send
+            if textarea_empty and new_msg:
+                return "textarea empty + new assistant message appeared"
+            if new_msg:
+                return "new assistant message appeared"
             return None
 
         # --- Attempt 1: wait up to 10s for any success signal ---------------
@@ -417,7 +421,7 @@ class BrowserController:
             await asyncio.sleep(1)
             reason = await _check_success()
             if reason:
-                self._article_count_before_send = 0
+                self._msg_count_before_send = 0
                 logger.info("Project-page send verified (%s)", reason)
                 return
 
@@ -437,7 +441,7 @@ class BrowserController:
             await asyncio.sleep(1)
             reason = await _check_success()
             if reason:
-                self._article_count_before_send = 0
+                self._msg_count_before_send = 0
                 logger.info(
                     "Project-page send verified on Enter retry (%s)", reason
                 )
@@ -474,7 +478,7 @@ class BrowserController:
             await asyncio.sleep(1)
             reason = await _check_success()
             if reason:
-                self._article_count_before_send = 0
+                self._msg_count_before_send = 0
                 logger.info(
                     "Project-page send verified on keyboard retry (%s)",
                     reason,
@@ -499,26 +503,26 @@ class BrowserController:
         """
         page = await self.ensure_connected()
 
-        articles = await page.locator(SEL_MAIN_ARTICLES).all()
-        if not articles:
+        msgs = await page.locator(SEL_ASSISTANT_MSG).all()
+        if not msgs:
             return ""
 
-        # Only consider articles that appeared AFTER we sent the message
-        if len(articles) <= self._article_count_before_send:
+        # Only consider messages that appeared AFTER we sent the message
+        if len(msgs) <= self._msg_count_before_send:
             return ""
 
-        last_article = articles[-1]
+        last_msg = msgs[-1]
 
         # The .markdown div is the authoritative signal: it only appears once
         # the actual response text starts rendering.  During Pro/Thinking
-        # "thinking" phases the article exists but contains only a thinking
-        # indicator — no .markdown div.
+        # "thinking" phases the message div exists but contains only a
+        # thinking indicator — no .markdown div.
         #
         # ChatGPT Pro renders thinking summaries in a *first* .markdown div
         # and the actual response in a *second* .markdown div within the
-        # same article.  Always use the LAST .markdown to get the real
+        # same message.  Always use the LAST .markdown to get the real
         # response, not the thinking summary.
-        md_all = await last_article.locator(".markdown").all()
+        md_all = await last_msg.locator(".markdown").all()
         if md_all:
             md = md_all[-1]  # last .markdown = actual response
             try:
@@ -529,7 +533,7 @@ class BrowserController:
                 pass
 
         # Fallback: .prose div (some response formats)
-        prose = last_article.locator(".prose").first
+        prose = last_msg.locator(".prose").first
         try:
             if await prose.count():
                 text = (await prose.inner_text()).strip()
@@ -585,11 +589,11 @@ class BrowserController:
         """
         page = await self.ensure_connected()
 
-        articles = await page.locator(SEL_MAIN_ARTICLES).all()
-        if not articles:
+        msgs = await page.locator(SEL_ASSISTANT_MSG).all()
+        if not msgs:
             return []
 
-        last = articles[-1]
+        last = msgs[-1]
 
         # Strategy 1: <a class="cursor-pointer"> inside .markdown
         md = last.locator(".markdown").first
@@ -659,9 +663,9 @@ class BrowserController:
 
         # Check for "Pro thinking" indicator (backup: a shimmer div that
         # appears during Pro extended thinking alongside placeholder text)
-        articles = await page.locator(SEL_MAIN_ARTICLES).all()
-        if len(articles) > self._article_count_before_send:
-            last = articles[-1]
+        msgs = await page.locator(SEL_ASSISTANT_MSG).all()
+        if len(msgs) > self._msg_count_before_send:
+            last = msgs[-1]
             try:
                 shimmer = last.locator("div.loading-shimmer")
                 if await shimmer.count():
@@ -672,7 +676,7 @@ class BrowserController:
             except Exception:
                 pass
 
-            # Article exists but empty — still in pre-streaming phase
+            # Message exists but empty — still in pre-streaming phase
             text = await self.get_last_response()
             if not text:
                 return True
@@ -686,21 +690,17 @@ class BrowserController:
         return False
 
     async def has_completion_indicators(self) -> bool:
-        """Check whether Copy / Good-response buttons are visible on the last article."""
+        """Check whether completion action buttons are visible.
+
+        Completion buttons (Copy, Good response, etc.) are NOT inside the
+        assistant message div on project pages — they live in a sibling or
+        ancestor container.  Search at page level using data-testid selectors.
+        """
         page = await self.ensure_connected()
 
-        articles = await page.locator(SEL_MAIN_ARTICLES).all()
-        if not articles:
-            return False
-
-        last = articles[-1]
-        for sel in (
-            'button[aria-label="Copy"]',
-            'button[aria-label="Good response"]',
-            'button[aria-label="Read aloud"]',
-        ):
+        for sel in SEL_COMPLETION_BUTTONS:
             try:
-                if await last.locator(sel).first.is_visible(timeout=500):
+                if await page.locator(sel).first.is_visible(timeout=500):
                     return True
             except Exception:
                 continue
@@ -740,5 +740,5 @@ class BrowserController:
                 )
 
         await page.wait_for_selector(SEL_PROMPT_TEXTAREA, timeout=10_000)
-        self._article_count_before_send = 0
+        self._msg_count_before_send = 0
         logger.info("Opened new chat: %s", page.url)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from mcp.server.fastmcp import FastMCP
 
 import os
 
 from .browser import BrowserController
+from .history import record_ask, start_new_chat
 from .models import get_model_config, DEFAULT_MODEL
 from .response import ResponseDetector
 
@@ -63,6 +65,7 @@ async def ask(
             "Wait for it to finish before sending another prompt."
         )
 
+    t0 = time.monotonic()
     try:
         _pending = True
 
@@ -74,6 +77,7 @@ async def ask(
         # would append to the previous dispatch's conversation.
         if _first_call:
             await _browser.new_chat()
+            start_new_chat()
             _first_call = False
 
         model_config = await _browser.select_model(mode)
@@ -101,11 +105,38 @@ async def ask(
             files_str = "\n".join(downloaded)
             result += f"\n\n[Downloaded files]\n{files_str}"
 
+        try:
+            record_ask(
+                prompt=prompt,
+                mode=mode or "deep",
+                file_paths=file_paths,
+                completed=completed,
+                response=response,
+                downloaded_files=downloaded,
+                duration_sec=time.monotonic() - t0,
+                error=None,
+            )
+        except Exception:
+            pass
+
         return result
 
     except Exception as exc:
         _pending = False
         logger.exception("consult.ask failed")
+        try:
+            record_ask(
+                prompt=prompt,
+                mode=mode or "deep",
+                file_paths=file_paths,
+                completed=False,
+                response="",
+                downloaded_files=[],
+                duration_sec=time.monotonic() - t0,
+                error=str(exc),
+            )
+        except Exception:
+            pass
         return f"Error: {exc}"
 
 
@@ -120,6 +151,7 @@ async def new_chat() -> str:
         )
     try:
         await _browser.new_chat()
+        start_new_chat()
         _first_call = False
         return "New chat opened."
     except Exception as exc:

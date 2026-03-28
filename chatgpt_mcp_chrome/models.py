@@ -7,19 +7,20 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelConfig:
-    # data-testid of the dropdown menu item, e.g. "model-switcher-gpt-5-2-pro"
-    dropdown_testid: str
+    # Text fragment to match inside the dropdown menu item (case-insensitive).
+    # The selector logic in browser.py searches all menu items for this text.
+    dropdown_text: str
     timeout_sec: int
     display_name: str
     # Pro thinking effort: None (not applicable), "Standard", or "Extended"
     thinking_effort: str | None = None
 
 
-# These map to the actual ChatGPT 5.4 dropdown options.
-# data-testid values come from the model switcher menu.
+# These map to the actual ChatGPT dropdown options.
+# dropdown_text is matched (case-insensitive substring) against menu item text.
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "standard": ModelConfig("model-switcher-gpt-5-4-pro", 3600, "Standard", "Standard"),
-    "deep": ModelConfig("model-switcher-gpt-5-4-pro", 7200, "Deep", "Extended"),
+    "standard": ModelConfig("pro", 3600, "Standard", "Standard"),
+    "deep": ModelConfig("pro", 7200, "Deep", "Extended"),
 }
 
 # Aliases — keep old names working for backward compat

@@ -192,8 +192,9 @@ class BrowserController:
     async def select_model(self, model: str | None) -> ModelConfig:
         """Select a model and thinking effort via the dropdown menu.
 
-        Opens the model-switcher dropdown, clicks the target menu item by
-        its ``data-testid``, then sets the Pro thinking effort if applicable.
+        Opens the model-switcher dropdown and finds the target menu item by
+        text match (first trying ``data-testid`` substring, then visible text
+        on menu items).  Sets the Pro thinking effort if applicable.
         """
         page = await self.ensure_connected()
         config = get_model_config(model)
@@ -215,10 +216,46 @@ class BrowserController:
                 await switcher.click(timeout=5_000)
                 await asyncio.sleep(0.5)
 
-                # Click the target menu item
-                item = page.locator(f'[data-testid="{config.dropdown_testid}"]').first
-                await item.click(timeout=5_000)
-                await asyncio.sleep(1)
+                # Find the target menu item by text match.
+                # Strategy 1: data-testid containing the text (e.g. "model-switcher-*pro*")
+                target_text = config.dropdown_text.lower()
+                item = None
+                try:
+                    testid_loc = page.locator(
+                        f'[data-testid*="model-switcher"][data-testid*="{target_text}"]'
+                    ).first
+                    if await testid_loc.count():
+                        item = testid_loc
+                except Exception:
+                    pass
+
+                # Strategy 2: menu items with matching visible text
+                if item is None:
+                    menu_items = await page.locator(
+                        '[role="menu"] [role="menuitem"], '
+                        '[role="menu"] [role="menuitemradio"], '
+                        '[data-radix-menu-content] div[tabindex]'
+                    ).all()
+                    for mi in menu_items:
+                        try:
+                            mi_text = (await mi.inner_text(timeout=1_000)).lower()
+                            if target_text in mi_text:
+                                item = mi
+                                break
+                        except Exception:
+                            continue
+
+                if item is not None:
+                    await item.click(timeout=5_000)
+                    await asyncio.sleep(1)
+                else:
+                    logger.warning(
+                        "Model menu item matching '%s' not found — "
+                        "continuing with current model",
+                        config.dropdown_text,
+                    )
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(0.3)
             except Exception as e:
                 logger.warning(
                     "Model switch failed (UI may have changed): %s — "

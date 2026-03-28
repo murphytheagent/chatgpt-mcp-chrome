@@ -210,18 +210,36 @@ class BrowserController:
             pass
 
         if need_model_switch:
-            # Open the dropdown
-            await switcher.click(timeout=5_000)
-            await asyncio.sleep(0.5)
+            try:
+                # Open the dropdown
+                await switcher.click(timeout=5_000)
+                await asyncio.sleep(0.5)
 
-            # Click the target menu item
-            item = page.locator(f'[data-testid="{config.dropdown_testid}"]').first
-            await item.click(timeout=5_000)
-            await asyncio.sleep(1)
+                # Click the target menu item
+                item = page.locator(f'[data-testid="{config.dropdown_testid}"]').first
+                await item.click(timeout=5_000)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.warning(
+                    "Model switch failed (UI may have changed): %s — "
+                    "continuing with current model",
+                    e,
+                )
+                # Dismiss any open dropdown by pressing Escape
+                try:
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    pass
 
         # Set thinking effort via the Pro chip menu
         if config.thinking_effort:
-            await self._set_thinking_effort(config.thinking_effort)
+            try:
+                await self._set_thinking_effort(config.thinking_effort)
+            except Exception as e:
+                logger.warning(
+                    "Thinking effort selection failed: %s — continuing", e
+                )
 
         logger.info("Selected mode '%s' (effort: %s)", config.display_name, config.thinking_effort)
         return config
@@ -236,7 +254,7 @@ class BrowserController:
 
         # Find the Pro chip button (the one with text "Pro", not the X button)
         pro_btn = page.locator('button:has-text("Pro")').last
-        bbox = await pro_btn.bounding_box()
+        bbox = await pro_btn.bounding_box(timeout=5_000)
         if not bbox:
             logger.warning("Pro chip not found — skipping effort selection")
             return

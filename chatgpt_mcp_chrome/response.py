@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Tuning knobs
 POLL_INTERVAL_SEC = 2.0
-STABILITY_CHECKS = 3  # consecutive identical non-empty snapshots → done
+STABILITY_CHECKS = 5  # consecutive identical non-empty snapshots → done
+SHORT_RESPONSE_THRESHOLD = 500  # chars; short responses get extra verification
 INITIAL_GRACE_SEC = 3.0  # let the UI start generating before first poll
 DIAG_LOG_INTERVAL = 15  # log diagnostics every N polls (~30s at 2s interval)
 
@@ -75,6 +76,32 @@ class ResponseDetector:
             # Phase 2: completion indicators + non-empty text
             response = await self._browser.get_last_response()
             if await self._browser.has_completion_indicators() and response:
+                # Short-response re-check: placeholder texts like
+                # "I'm checking..." can briefly show completion indicators
+                # before the model starts a new assistant message.
+                if len(response) < SHORT_RESPONSE_THRESHOLD:
+                    logger.info(
+                        "Short response (%d chars) with indicators — "
+                        "re-checking after 2 poll intervals",
+                        len(response),
+                    )
+                    await asyncio.sleep(POLL_INTERVAL_SEC * 2)
+
+                    recheck = await self._browser.get_last_response()
+                    still_generating = await self._browser.is_generating()
+
+                    if recheck != response or still_generating:
+                        # Text changed or model resumed generating —
+                        # reset stability and keep polling.
+                        logger.info(
+                            "Short-response re-check: changed=%s, "
+                            "is_generating=%s — continuing poll",
+                            recheck != response, still_generating,
+                        )
+                        stable_count = 0
+                        last_text = recheck or ""
+                        continue
+
                 elapsed = int(time.monotonic() - start)
                 logger.info(
                     "Response complete (indicators + text) after %ds, "

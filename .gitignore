@@ -4,6 +4,7 @@ dist/
 build/
 .pytest_cache/
 *.pyc
+.venv/
 
 # macOS Google Drive folder icons.
 Icon?

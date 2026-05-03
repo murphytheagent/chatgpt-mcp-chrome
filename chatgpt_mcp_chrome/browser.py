@@ -9,6 +9,7 @@ import subprocess
 
 from playwright.async_api import (
     Browser,
+    Locator,
     Page,
     Playwright,
     async_playwright,
@@ -38,7 +39,20 @@ SEL_COMPLETION_BUTTONS = [
     'button[aria-label="Good response"]',
 ]
 SEL_NEW_CHAT = '[data-testid="create-new-chat-button"]'
-SEL_MODEL_SWITCHER = '[data-testid="model-switcher-dropdown-button"]'
+# Current ChatGPT composer model control is a pill with visible text such as
+# "Extended Pro", "Standard Pro", "Thinking", or "Instant". Keep the old
+# data-testid switcher only as a fallback for older UI variants.
+SEL_MODEL_SWITCHER = (
+    'button.__composer-pill[aria-haspopup="menu"]:has-text("Pro"), '
+    'button.__composer-pill[aria-haspopup="menu"]:has-text("Thinking"), '
+    'button.__composer-pill[aria-haspopup="menu"]:has-text("Instant")'
+)
+SEL_MODEL_SWITCHER_LEGACY = '[data-testid="model-switcher-dropdown-button"]'
+SEL_MODEL_MENU_ITEMS = (
+    '[role="menu"] [role="menuitem"], '
+    '[role="menu"] [role="menuitemradio"], '
+    '[data-radix-menu-content] div[tabindex]'
+)
 SEL_FILE_INPUT = 'input[type="file"]'
 SEL_ATTACH_BUTTON = 'button[aria-label="Attach files"]'
 
@@ -200,12 +214,13 @@ class BrowserController:
         config = get_model_config(model)
 
         # Check if the target model is already selected
-        switcher = page.locator(SEL_MODEL_SWITCHER).first
+        switcher = await self._locate_model_switcher(page)
         need_model_switch = True
         try:
-            label = await switcher.get_attribute("aria-label") or ""
-            # e.g. "Model selector, current model is 5.2 Pro"
-            if "pro" in label.lower():
+            label = (await switcher.inner_text()).strip()
+            if not label:
+                label = await switcher.get_attribute("aria-label") or ""
+            if config.dropdown_text.lower() in label.lower():
                 need_model_switch = False
         except Exception:
             pass
@@ -213,8 +228,7 @@ class BrowserController:
         if need_model_switch:
             try:
                 # Open the dropdown
-                await switcher.click(timeout=5_000)
-                await asyncio.sleep(0.5)
+                await self._open_model_switcher_menu(page, switcher)
 
                 # Find the target menu item by text match.
                 # Strategy 1: data-testid containing the text (e.g. "model-switcher-*pro*")
@@ -231,11 +245,7 @@ class BrowserController:
 
                 # Strategy 2: menu items with matching visible text
                 if item is None:
-                    menu_items = await page.locator(
-                        '[role="menu"] [role="menuitem"], '
-                        '[role="menu"] [role="menuitemradio"], '
-                        '[data-radix-menu-content] div[tabindex]'
-                    ).all()
+                    menu_items = await page.locator(SEL_MODEL_MENU_ITEMS).all()
                     for mi in menu_items:
                         try:
                             mi_text = (await mi.inner_text(timeout=1_000)).lower()
@@ -249,66 +259,152 @@ class BrowserController:
                     await item.click(timeout=5_000)
                     await asyncio.sleep(1)
                 else:
-                    logger.warning(
-                        "Model menu item matching '%s' not found — "
-                        "continuing with current model",
-                        config.dropdown_text,
-                    )
                     await page.keyboard.press("Escape")
                     await asyncio.sleep(0.3)
+                    raise RuntimeError(
+                        f"Model menu item matching '{config.dropdown_text}' not found"
+                    )
             except Exception as e:
-                logger.warning(
-                    "Model switch failed (UI may have changed): %s — "
-                    "continuing with current model",
-                    e,
-                )
+                logger.warning("Model switch failed: %s", e)
                 # Dismiss any open dropdown by pressing Escape
                 try:
                     await page.keyboard.press("Escape")
                     await asyncio.sleep(0.3)
                 except Exception:
                     pass
+                raise RuntimeError(
+                    f"Mode switching failed for requested mode '{model}': {e}"
+                ) from e
 
         # Set thinking effort via the Pro chip menu
         if config.thinking_effort:
             try:
                 await self._set_thinking_effort(config.thinking_effort)
             except Exception as e:
-                logger.warning(
-                    "Thinking effort selection failed: %s — continuing", e
-                )
+                raise RuntimeError(
+                    f"Thinking effort selection failed for requested mode '{model}': {e}"
+                ) from e
 
         logger.info("Selected mode '%s' (effort: %s)", config.display_name, config.thinking_effort)
         return config
 
+    async def describe_current_model(self) -> str | None:
+        """Return the current visible composer-model label, if available."""
+        page = await self.ensure_connected()
+        try:
+            switcher = await self._locate_model_switcher(page)
+            label = (await switcher.inner_text()).strip()
+            if label:
+                return label
+            label = (await switcher.get_attribute("aria-label") or "").strip()
+            return label or None
+        except Exception:
+            return None
+
+    async def _locate_model_switcher(self, page: Page) -> Locator:
+        """Return the composer model switcher, preferring the current pill UI."""
+        for selector in (SEL_MODEL_SWITCHER, SEL_MODEL_SWITCHER_LEGACY):
+            locator = page.locator(selector).first
+            try:
+                if await locator.count():
+                    return locator
+            except Exception:
+                continue
+        raise RuntimeError("Model switcher control not found")
+
+    async def _open_model_switcher_menu(self, page: Page, switcher: Locator) -> None:
+        """Open the model switcher menu with fallbacks for overlay-heavy UIs."""
+        try:
+            await switcher.scroll_into_view_if_needed(timeout=3_000)
+        except Exception:
+            pass
+
+        open_attempts = (
+            lambda: switcher.click(timeout=3_000),
+            lambda: switcher.click(force=True, timeout=3_000),
+            lambda: switcher.press("Enter", timeout=3_000),
+            lambda: switcher.press(" ", timeout=3_000),
+        )
+        for attempt in open_attempts:
+            try:
+                if (await switcher.get_attribute("aria-expanded")) == "true":
+                    return
+            except Exception:
+                pass
+            try:
+                await attempt()
+                await asyncio.sleep(0.5)
+            except Exception:
+                continue
+            try:
+                if (await switcher.get_attribute("aria-expanded")) == "true":
+                    return
+            except Exception:
+                pass
+
+        # Final fallback for buttons that ignore normal pointer events.
+        try:
+            await switcher.evaluate("(el) => el.click()")
+            await asyncio.sleep(0.5)
+            if (await switcher.get_attribute("aria-expanded")) == "true":
+                return
+        except Exception:
+            pass
+
+        await page.keyboard.press("Escape")
+        raise RuntimeError("Could not open model switcher menu")
+
     async def _set_thinking_effort(self, effort: str) -> None:
         """Set Pro thinking effort ('Standard' or 'Extended').
 
-        Clicks the Pro chip in the composer footer to open the effort menu,
-        then selects the target option via role=menuitemradio text match.
+        Opens the model menu, expands the Pro-specific "Effort" submenu when
+        available, then selects the target option by exact menu item text.
+        Falls back to the older composer-chip interaction when the submenu
+        structure is absent.
         """
         page = await self.ensure_connected()
+        switcher = await self._locate_model_switcher(page)
 
-        # Find the Pro chip button (the one with text "Pro", not the X button)
-        pro_btn = page.locator('button:has-text("Pro")').last
-        bbox = await pro_btn.bounding_box(timeout=5_000)
-        if not bbox:
-            logger.warning("Pro chip not found — skipping effort selection")
-            return
-
-        # Click the right side of the chip to open the effort menu
-        await page.mouse.click(
-            bbox["x"] + bbox["width"] - 5,
-            bbox["y"] + bbox["height"] / 2,
-        )
-        await asyncio.sleep(0.8)
-
-        # Check if the desired effort is already selected
-        target = page.locator(f'[role="menuitemradio"]:has-text("{effort}")')
         try:
-            checked = await target.get_attribute("aria-checked", timeout=3_000)
+            await self._open_model_switcher_menu(page, switcher)
+            effort_entry = page.locator('[data-testid*="pro-thinking-effort"]').first
+            if await effort_entry.count():
+                await effort_entry.click(force=True, timeout=3_000)
+                await asyncio.sleep(0.5)
+                target = await self._find_exact_menu_item(page, effort)
+                if target is not None:
+                    checked = await target.get_attribute("aria-checked")
+                    if checked == "true":
+                        await page.keyboard.press("Escape")
+                        await asyncio.sleep(0.3)
+                        await page.keyboard.press("Escape")
+                        await asyncio.sleep(0.3)
+                        logger.info("Thinking effort '%s' already selected", effort)
+                        return
+                    await target.click(timeout=3_000)
+                    await asyncio.sleep(0.5)
+                    logger.info("Set thinking effort to '%s'", effort)
+                    return
+        except Exception:
+            pass
+
+        # Older UI fallback: click the right side of the Pro chip directly.
+        try:
+            pro_btn = page.locator('button:has-text("Pro")').last
+            bbox = await pro_btn.bounding_box(timeout=5_000)
+            if not bbox:
+                logger.warning("Pro chip not found — skipping effort selection")
+                return
+            await page.mouse.click(
+                bbox["x"] + bbox["width"] - 5,
+                bbox["y"] + bbox["height"] / 2,
+            )
+            await asyncio.sleep(0.8)
+            target = await self._find_exact_menu_item(page, effort)
+            if target is None:
+                raise RuntimeError("effort menu item not found")
+            checked = await target.get_attribute("aria-checked")
             if checked == "true":
-                # Already set — dismiss menu by pressing Escape
                 await page.keyboard.press("Escape")
                 await asyncio.sleep(0.3)
                 logger.info("Thinking effort '%s' already selected", effort)
@@ -316,10 +412,24 @@ class BrowserController:
             await target.click(timeout=3_000)
             await asyncio.sleep(0.5)
             logger.info("Set thinking effort to '%s'", effort)
-        except Exception:
-            # Menu might not have appeared (e.g. non-Pro model) — dismiss
-            await page.keyboard.press("Escape")
-            logger.warning("Could not set thinking effort to '%s'", effort)
+        except Exception as exc:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            raise RuntimeError(f"Could not set thinking effort to '{effort}'") from exc
+
+    async def _find_exact_menu_item(self, page: Page, text: str) -> Locator | None:
+        """Return a menu item whose visible text exactly matches ``text``."""
+        desired = text.strip().lower()
+        for item in await page.locator(SEL_MODEL_MENU_ITEMS).all():
+            try:
+                item_text = (await item.inner_text(timeout=1_000)).strip().lower()
+            except Exception:
+                continue
+            if item_text == desired:
+                return item
+        return None
 
     # ------------------------------------------------------------------
     # Project navigation

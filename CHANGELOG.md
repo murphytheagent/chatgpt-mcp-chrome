@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-05-02
+
+### Fixed
+- **Composer model selector migration**: ChatGPT now exposes the real model control as a composer pill (`Extended Pro` / `Pro` / `Thinking` / `Instant`) instead of the old `data-testid="model-switcher-dropdown-button"` button. Consult now targets the composer pill first, retains the legacy selector only as fallback, and uses a more defensive menu-open path when normal clicks are intercepted by the footer layout.
+- **Standard vs Extended effort selection on the new menu**: The Pro effort control now lives behind the menu's `Effort` entry rather than a separate chip-only menu. Consult now expands the Pro-specific effort submenu and picks `Standard` / `Extended` by exact menu text, avoiding false matches against the main `Pro • Extended` model item.
+- **Omitted `mode` no longer blocks submission**: `consult.ask(..., mode=None)` now skips model switching entirely, uploads files and submits using the current browser tab selection, and records provenance as `current-tab` / `current-tab:<label>` instead of silently defaulting to deep-mode switching. Explicit mode requests remain strict and now fail clearly before upload if the model switcher is unavailable or the requested mode cannot be applied.
+
 ## 2026-03-28
 
 ### Fixed

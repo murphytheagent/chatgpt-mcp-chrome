@@ -80,7 +80,14 @@ async def ask(
             start_new_chat()
             _first_call = False
 
-        model_config = await _browser.select_model(mode)
+        if mode is None:
+            # Omitted mode means "use whatever the current browser tab already has
+            # selected" — do not touch the model switcher before file upload or send.
+            model_config = get_model_config(DEFAULT_MODEL)
+            recorded_mode = "current-tab"
+        else:
+            model_config = await _browser.select_model(mode)
+            recorded_mode = mode
 
         # Upload files before sending the message
         if file_paths:
@@ -88,6 +95,11 @@ async def ask(
 
         await _browser.send_message(prompt)
         completed, response = await _detector.wait_for_response(model_config)
+
+        if mode is None:
+            current_label = await _browser.describe_current_model()
+            if current_label:
+                recorded_mode = f"current-tab:{current_label}"
 
         # Try to download any generated files
         downloaded = await _browser.download_generated_files()
@@ -108,7 +120,7 @@ async def ask(
         try:
             record_ask(
                 prompt=prompt,
-                mode=mode or "deep",
+                mode=recorded_mode,
                 file_paths=file_paths,
                 completed=completed,
                 response=response,
@@ -127,7 +139,7 @@ async def ask(
         try:
             record_ask(
                 prompt=prompt,
-                mode=mode or "deep",
+                mode=mode or "current-tab",
                 file_paths=file_paths,
                 completed=False,
                 response="",

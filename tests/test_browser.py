@@ -90,6 +90,46 @@ class TestBrowserModelSwitcher(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(switcher, composer)
 
+    async def test_locate_model_switcher_matches_unknown_model_label(self) -> None:
+        # Regression: SEL_MODEL_SWITCHER must match on class + aria-haspopup
+        # alone, not on a hard-coded list of model names. ChatGPT introduced
+        # "Heavy" as a default pill label and the previous text-filtered
+        # selector silently skipped it, leaving select_model() to raise
+        # "Model switcher control not found" on /project pages.
+        controller = BrowserController()
+        composer = _FakeLocator(inner_text="Heavy")
+        page = _FakePage({SEL_MODEL_SWITCHER: composer})
+
+        switcher = await controller._locate_model_switcher(page)
+
+        self.assertIs(switcher, composer)
+
+    async def test_locate_model_switcher_polls_until_pill_appears(self) -> None:
+        # Regression: composer pill is sometimes not hydrated immediately
+        # after new_chat() returns, so _locate_model_switcher must poll
+        # rather than fail on the first count==0 result.
+        controller = BrowserController()
+        composer = _FakeLocator(inner_text="Thinking")
+
+        class _DelayedPage(_FakePage):
+            def __init__(self, ready_after_calls: int) -> None:
+                super().__init__({})
+                self._calls = 0
+                self._ready_after = ready_after_calls
+
+            def locator(self, selector: str) -> _FakeLocator:
+                if selector == SEL_MODEL_SWITCHER:
+                    self._calls += 1
+                    if self._calls > self._ready_after:
+                        return composer
+                return _FakeLocator(count=0)
+
+        page = _DelayedPage(ready_after_calls=2)
+
+        switcher = await controller._locate_model_switcher(page, timeout_ms=2_000)
+
+        self.assertIs(switcher, composer)
+
     async def test_open_model_switcher_menu_uses_force_click_fallback(self) -> None:
         controller = BrowserController()
         switcher = _FakeLocator(

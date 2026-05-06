@@ -39,14 +39,14 @@ SEL_COMPLETION_BUTTONS = [
     'button[aria-label="Good response"]',
 ]
 SEL_NEW_CHAT = '[data-testid="create-new-chat-button"]'
-# Current ChatGPT composer model control is a pill with visible text such as
-# "Extended Pro", "Standard Pro", "Thinking", or "Instant". Keep the old
-# data-testid switcher only as a fallback for older UI variants.
-SEL_MODEL_SWITCHER = (
-    'button.__composer-pill[aria-haspopup="menu"]:has-text("Pro"), '
-    'button.__composer-pill[aria-haspopup="menu"]:has-text("Thinking"), '
-    'button.__composer-pill[aria-haspopup="menu"]:has-text("Instant")'
-)
+# Current ChatGPT composer model control is a pill with visible text that
+# identifies the active model — e.g. "Extended Pro", "Standard Pro",
+# "Thinking", "Instant", or newer entries like "Heavy". The model name
+# itself is unstable across rollouts, so match on the class + aria-haspopup
+# combination, which uniquely identifies the model-switcher pill in the
+# composer. Keep the old data-testid switcher as a fallback for older UI
+# variants.
+SEL_MODEL_SWITCHER = 'button.__composer-pill[aria-haspopup="menu"]'
 SEL_MODEL_SWITCHER_LEGACY = '[data-testid="model-switcher-dropdown-button"]'
 SEL_MODEL_MENU_ITEMS = (
     '[role="menu"] [role="menuitem"], '
@@ -301,15 +301,28 @@ class BrowserController:
         except Exception:
             return None
 
-    async def _locate_model_switcher(self, page: Page) -> Locator:
-        """Return the composer model switcher, preferring the current pill UI."""
-        for selector in (SEL_MODEL_SWITCHER, SEL_MODEL_SWITCHER_LEGACY):
-            locator = page.locator(selector).first
-            try:
-                if await locator.count():
-                    return locator
-            except Exception:
-                continue
+    async def _locate_model_switcher(
+        self, page: Page, timeout_ms: int = 5_000
+    ) -> Locator:
+        """Return the composer model switcher, preferring the current pill UI.
+
+        Polls for up to ``timeout_ms`` so callers can run immediately after
+        ``new_chat()`` / project navigation, where the composer pill may not
+        be hydrated yet even though ``#prompt-textarea`` already exists.
+        """
+        import time as _time
+        deadline = _time.monotonic() + (timeout_ms / 1000.0)
+        while True:
+            for selector in (SEL_MODEL_SWITCHER, SEL_MODEL_SWITCHER_LEGACY):
+                locator = page.locator(selector).first
+                try:
+                    if await locator.count():
+                        return locator
+                except Exception:
+                    continue
+            if _time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.25)
         raise RuntimeError("Model switcher control not found")
 
     async def _open_model_switcher_menu(self, page: Page, switcher: Locator) -> None:

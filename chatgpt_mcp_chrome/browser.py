@@ -433,14 +433,21 @@ class BrowserController:
             raise RuntimeError(f"Could not set thinking effort to '{effort}'") from exc
 
     async def _find_exact_menu_item(self, page: Page, text: str) -> Locator | None:
-        """Return a menu item whose visible text exactly matches ``text``."""
+        """Return the thinking-effort menu item matching ``text``.
+
+        ChatGPT's effort submenu now labels the options "Pro Standard" /
+        "Pro Extended"; older builds used the bare "Standard" / "Extended".
+        Accept either the exact effort name or the "Pro <effort>" form so the
+        selection survives that rename.
+        """
         desired = text.strip().lower()
+        candidates = {desired, f"pro {desired}"}
         for item in await page.locator(SEL_MODEL_MENU_ITEMS).all():
             try:
                 item_text = (await item.inner_text(timeout=1_000)).strip().lower()
             except Exception:
                 continue
-            if item_text == desired:
+            if item_text in candidates:
                 return item
         return None
 
